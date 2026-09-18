@@ -50,7 +50,7 @@ jobs:
       - name: Package Windows Desktop App (.exe)
         run: pnpm run package:desktop:win:x64:unsigned
 
-      - name: Find and identify .exe installer
+      - name: Find and compress installer
         id: find_exe
         shell: pwsh
         run: |
@@ -66,10 +66,16 @@ jobs:
             $installer = Get-ChildItem -Path apps/desktop -Recurse -Filter "*.exe" | Sort-Object Length -Descending | Select-Object -First 1
           }
           Write-Host "Selected installer: $($installer.FullName)"
-          echo "INSTALLER_PATH=$($installer.FullName)" >> $env:GITHUB_ENV
-          echo "INSTALLER_NAME=$($installer.Name)" >> $env:GITHUB_ENV
+          
+          # Compress to zip with 7-Zip ultra compression
+          $zipPath = "$($installer.DirectoryName)/$($installer.BaseName)-compressed.zip"
+          Write-Host "Compressing to: $zipPath"
+          & 7z a -tzip -mx=9 "$zipPath" "$($installer.FullName)"
 
-      - name: Create GitHub Release and Upload .EXE
+          echo "INSTALLER_PATH=$($installer.FullName)" >> $env:GITHUB_ENV
+          echo "ZIP_PATH=$zipPath" >> $env:GITHUB_ENV
+
+      - name: Create GitHub Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'v0.1.6-alpha.2' }}
@@ -77,12 +83,14 @@ jobs:
           body: |
             ## DeepSeek Harness Windows Desktop Release 🚀
             
-            نسخة تطبيق سطح المكتب لنظام ويندوز جاهزة للتحميل والتثبيت المباشر.
+            نسخة تطبيق سطح المكتب لنظام ويندوز جاهزة للتحميل والتثبيت المباشر بأعلى درجات الضغط.
             
-            ### التحميل المباشر (Direct Download):
-            - قم بتحميل ملف التثبيت `.exe` من المرفقات أدناه (Assets).
-            - شغّل الملف لتثبيت واستخدام DeepSeek Harness على نظام ويندوز.
-          files: ${{ env.INSTALLER_PATH }}
+            ### خيارات التحميل (Downloads):
+            - **ملف التثبيت المباشر (`.exe`)**: جاهز للتشغيل والتثبيت فوراً.
+            - **الملف المضغوط (`-compressed.zip`)**: نسخة مضغوطة بحجم أقل لتسريع التنزيل.
+          files: |
+            ${{ env.INSTALLER_PATH }}
+            ${{ env.ZIP_PATH }}
           draft: false
           prerelease: false
         env:

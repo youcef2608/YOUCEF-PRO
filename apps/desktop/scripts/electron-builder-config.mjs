@@ -81,6 +81,7 @@ export function createElectronBuilderConfig(
     productName: 'DeepSeek Harness',
     artifactName: 'deepseek-harness-${version}-${os}-${arch}.${ext}',
     directories: { output: unsigned ? join(buildPaths.root, 'unsigned-artifacts') : buildPaths.artifacts },
+    compression: 'maximum',
     asar: true,
     electronDist: buildPaths.electron,
     electronFuses: { runAsNode: true },
