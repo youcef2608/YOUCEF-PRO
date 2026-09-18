@@ -50,27 +50,74 @@ jobs:
       - name: Package Windows Desktop App (.exe)
         run: pnpm run package:desktop:win:x64:unsigned
 
-      - name: Find and compress installer
+      - name: Strip unnecessary files to reduce size
+        shell: pwsh
+        run: |
+          # Find the unpacked app directory
+          $unpackedDirs = Get-ChildItem -Path "apps/desktop/.desktop-build" -Recurse -Directory -Filter "win-unpacked" -ErrorAction SilentlyContinue
+          foreach ($dir in $unpackedDirs) {
+            Write-Host "Processing unpacked dir: $($dir.FullName)"
+            
+            # 1. Remove unnecessary Electron locales (keep only en-US)
+            $localesDir = Join-Path $dir.FullName "locales"
+            if (Test-Path $localesDir) {
+              Get-ChildItem $localesDir -File | Where-Object { $_.Name -notmatch "^en-US\." } | ForEach-Object {
+                Remove-Item $_.FullName -Force
+                Write-Host "  Removed locale: $($_.Name)"
+              }
+            }
+
+            # 2. Remove debug/development files
+            Get-ChildItem $dir.FullName -Recurse -Include "*.pdb","*.map","*.d.ts","*.d.mts","*.tsbuildinfo","*.md","LICENSE*","CHANGELOG*","README*","CONTRIBUTING*" -File -ErrorAction SilentlyContinue | ForEach-Object {
+              Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+              Write-Host "  Removed: $($_.Name)"
+            }
+
+            # 3. Remove test directories, docs, examples
+            Get-ChildItem $dir.FullName -Recurse -Directory -Include "test","tests","__tests__","docs","doc","examples","example",".github","benchmarks","coverage","snapshots" -ErrorAction SilentlyContinue | ForEach-Object {
+              Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+              Write-Host "  Removed dir: $($_.Name)"
+            }
+
+            # 4. Remove TypeScript source files (keep only compiled JS)
+            Get-ChildItem $dir.FullName -Recurse -Include "*.ts","*.tsx" -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch "\.d\.ts$" } | ForEach-Object {
+              $jsEquivalent = $_.FullName -replace "\.tsx?$", ".js"
+              if (Test-Path $jsEquivalent) {
+                Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+                Write-Host "  Removed TS source (JS exists): $($_.Name)"
+              }
+            }
+          }
+
+          # Calculate size reduction
+          $exeFile = Get-ChildItem -Path "apps/desktop/.desktop-build" -Recurse -Filter "*deepseek-harness*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($exeFile) {
+            $sizeMB = [math]::Round($exeFile.Length / 1MB, 2)
+            Write-Host "Current .exe size: ${sizeMB} MB"
+          }
+
+      - name: Find and compress installer  
         id: find_exe
         shell: pwsh
         run: |
-          $exeFiles = Get-ChildItem -Path apps/desktop -Recurse -Filter "*.exe" | Select-Object -ExpandProperty FullName
-          Write-Host "Found EXE files:"
-          $exeFiles | ForEach-Object { Write-Host $_ }
-          if (-not $exeFiles) {
-            Write-Error "No .exe installer found!"
-            exit 1
-          }
-          $installer = Get-ChildItem -Path "apps/desktop/.desktop-build", "apps/desktop/dist" -Recurse -Filter "*deepseek-harness*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          $installer = Get-ChildItem -Path "apps/desktop/.desktop-build" -Recurse -Filter "*deepseek-harness*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $installer) {
             $installer = Get-ChildItem -Path apps/desktop -Recurse -Filter "*.exe" | Sort-Object Length -Descending | Select-Object -First 1
           }
-          Write-Host "Selected installer: $($installer.FullName)"
+          if (-not $installer) {
+            Write-Error "No .exe installer found!"
+            exit 1
+          }
+          $sizeMB = [math]::Round($installer.Length / 1MB, 2)
+          Write-Host "Installer: $($installer.FullName) (${sizeMB} MB)"
+
+          # Compress with 7-Zip ultra compression (LZMA2)
+          $zipPath = "$($installer.DirectoryName)/DeepSeek-Harness-Windows-Compressed.zip"
+          Write-Host "Compressing with 7-Zip LZMA2 ultra..."
+          & 7z a -tzip -mx=9 -mfb=258 -mpass=15 "$zipPath" "$($installer.FullName)"
           
-          # Compress to zip with 7-Zip ultra compression
-          $zipPath = "$($installer.DirectoryName)/$($installer.BaseName)-compressed.zip"
-          Write-Host "Compressing to: $zipPath"
-          & 7z a -tzip -mx=9 "$zipPath" "$($installer.FullName)"
+          $zipSizeMB = [math]::Round((Get-Item $zipPath).Length / 1MB, 2)
+          Write-Host "Compressed ZIP size: ${zipSizeMB} MB (saved $([math]::Round($sizeMB - $zipSizeMB, 2)) MB)"
 
           echo "INSTALLER_PATH=$($installer.FullName)" >> $env:GITHUB_ENV
           echo "ZIP_PATH=$zipPath" >> $env:GITHUB_ENV
@@ -83,11 +130,11 @@ jobs:
           body: |
             ## DeepSeek Harness Windows Desktop Release 🚀
             
-            نسخة تطبيق سطح المكتب لنظام ويندوز جاهزة للتحميل والتثبيت المباشر بأعلى درجات الضغط.
+            نسخة تطبيق سطح المكتب لنظام ويندوز مضغوطة بأقصى درجات الضغط.
             
             ### خيارات التحميل (Downloads):
-            - **ملف التثبيت المباشر (`.exe`)**: جاهز للتشغيل والتثبيت فوراً.
-            - **الملف المضغوط (`-compressed.zip`)**: نسخة مضغوطة بحجم أقل لتسريع التنزيل.
+            - **`.exe`** — ملف التثبيت المباشر: حمّله وشغّله مباشرة.
+            - **`-Compressed.zip`** — نسخة مضغوطة بحجم أقل: فك الضغط ثم شغّل ملف الـ `.exe`.
           files: |
             ${{ env.INSTALLER_PATH }}
             ${{ env.ZIP_PATH }}
