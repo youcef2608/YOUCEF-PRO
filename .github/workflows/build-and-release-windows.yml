@@ -36,6 +36,17 @@ jobs:
       - name: Build packages and Web UI
         run: pnpm run build
 
+      - name: Configure desktop environment (.env.windows)
+        shell: pwsh
+        run: |
+          @"
+          DSH_DESKTOP_APP_ID=com.deepseek.harness
+          DSH_DESKTOP_AUTO_UPDATE_ENV=test
+          DOWNLOAD_TEST_ORIGIN=https://download.deepseek.com
+          DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://harness-test.deepseek.com
+          DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=https://harness.deepseek.com
+          "@ | Set-Content -Path "apps/desktop/.env.windows" -Encoding utf8
+
       - name: Package Windows Desktop App (.exe)
         run: pnpm run package:desktop:win:x64:unsigned
 
