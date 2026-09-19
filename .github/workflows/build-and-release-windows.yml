@@ -50,53 +50,7 @@ jobs:
       - name: Package Windows Desktop App (.exe)
         run: pnpm run package:desktop:win:x64:unsigned
 
-      - name: Strip unnecessary files to reduce size
-        shell: pwsh
-        run: |
-          # Find the unpacked app directory
-          $unpackedDirs = Get-ChildItem -Path "apps/desktop/.desktop-build" -Recurse -Directory -Filter "win-unpacked" -ErrorAction SilentlyContinue
-          foreach ($dir in $unpackedDirs) {
-            Write-Host "Processing unpacked dir: $($dir.FullName)"
-            
-            # 1. Remove unnecessary Electron locales (keep only en-US)
-            $localesDir = Join-Path $dir.FullName "locales"
-            if (Test-Path $localesDir) {
-              Get-ChildItem $localesDir -File | Where-Object { $_.Name -notmatch "^en-US\." } | ForEach-Object {
-                Remove-Item $_.FullName -Force
-                Write-Host "  Removed locale: $($_.Name)"
-              }
-            }
-
-            # 2. Remove debug/development files
-            Get-ChildItem $dir.FullName -Recurse -Include "*.pdb","*.map","*.d.ts","*.d.mts","*.tsbuildinfo","*.md","LICENSE*","CHANGELOG*","README*","CONTRIBUTING*" -File -ErrorAction SilentlyContinue | ForEach-Object {
-              Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
-              Write-Host "  Removed: $($_.Name)"
-            }
-
-            # 3. Remove test directories, docs, examples
-            Get-ChildItem $dir.FullName -Recurse -Directory -Include "test","tests","__tests__","docs","doc","examples","example",".github","benchmarks","coverage","snapshots" -ErrorAction SilentlyContinue | ForEach-Object {
-              Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-              Write-Host "  Removed dir: $($_.Name)"
-            }
-
-            # 4. Remove TypeScript source files (keep only compiled JS)
-            Get-ChildItem $dir.FullName -Recurse -Include "*.ts","*.tsx" -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch "\.d\.ts$" } | ForEach-Object {
-              $jsEquivalent = $_.FullName -replace "\.tsx?$", ".js"
-              if (Test-Path $jsEquivalent) {
-                Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
-                Write-Host "  Removed TS source (JS exists): $($_.Name)"
-              }
-            }
-          }
-
-          # Calculate size reduction
-          $exeFile = Get-ChildItem -Path "apps/desktop/.desktop-build" -Recurse -Filter "*deepseek-harness*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($exeFile) {
-            $sizeMB = [math]::Round($exeFile.Length / 1MB, 2)
-            Write-Host "Current .exe size: ${sizeMB} MB"
-          }
-
-      - name: Find and compress installer  
+      - name: Find and compress installer with maximum compression
         id: find_exe
         shell: pwsh
         run: |
@@ -111,16 +65,25 @@ jobs:
           $sizeMB = [math]::Round($installer.Length / 1MB, 2)
           Write-Host "Installer: $($installer.FullName) (${sizeMB} MB)"
 
-          # Compress with 7-Zip ultra compression (LZMA2)
+          # Compress with 7-Zip LZMA2 ultra settings for maximum compression
+          $sevenZipPath = "$($installer.DirectoryName)/DeepSeek-Harness-Windows-Compressed.7z"
+          Write-Host "Compressing with 7-Zip LZMA2 ultra (solid archive, 256MB dictionary)..."
+          & 7z a -t7z -m0=lzma2 -mx=9 -mfb=273 -md=256m -ms=on "$sevenZipPath" "$($installer.FullName)"
+
+          $sevenZipSizeMB = [math]::Round((Get-Item $sevenZipPath).Length / 1MB, 2)
+          Write-Host "7z archive size: ${sevenZipSizeMB} MB (saved $([math]::Round($sizeMB - $sevenZipSizeMB, 2)) MB)"
+
+          # Also create a ZIP for users who prefer it (still with max compression)
           $zipPath = "$($installer.DirectoryName)/DeepSeek-Harness-Windows-Compressed.zip"
-          Write-Host "Compressing with 7-Zip LZMA2 ultra..."
+          Write-Host "Creating ZIP fallback with maximum deflate compression..."
           & 7z a -tzip -mx=9 -mfb=258 -mpass=15 "$zipPath" "$($installer.FullName)"
-          
+
           $zipSizeMB = [math]::Round((Get-Item $zipPath).Length / 1MB, 2)
-          Write-Host "Compressed ZIP size: ${zipSizeMB} MB (saved $([math]::Round($sizeMB - $zipSizeMB, 2)) MB)"
+          Write-Host "ZIP size: ${zipSizeMB} MB"
 
           echo "INSTALLER_PATH=$($installer.FullName)" >> $env:GITHUB_ENV
           echo "ZIP_PATH=$zipPath" >> $env:GITHUB_ENV
+          echo "SEVEN_ZIP_PATH=$sevenZipPath" >> $env:GITHUB_ENV
 
       - name: Create GitHub Release and Upload Assets
         uses: softprops/action-gh-release@v2
@@ -134,11 +97,14 @@ jobs:
             
             ### خيارات التحميل (Downloads):
             - **`.exe`** — ملف التثبيت المباشر: حمّله وشغّله مباشرة.
-            - **`-Compressed.zip`** — نسخة مضغوطة بحجم أقل: فك الضغط ثم شغّل ملف الـ `.exe`.
+            - **`-Compressed.7z`** — 🏆 أقصى ضغط (LZMA2): أصغر حجم ممكن. يحتاج [7-Zip](https://7-zip.org) لفك الضغط.
+            - **`-Compressed.zip`** — نسخة مضغوطة متوافقة: فك الضغط ثم شغّل ملف الـ `.exe`.
           files: |
             ${{ env.INSTALLER_PATH }}
+            ${{ env.SEVEN_ZIP_PATH }}
             ${{ env.ZIP_PATH }}
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
